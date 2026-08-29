@@ -1,5 +1,8 @@
+use std::fs::File;
+use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -10,11 +13,28 @@ use wayland_server::protocol::{
     wl_buffer, wl_compositor, wl_region, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_server::{
-    DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, ListeningSocket, New,
+    DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, ListeningSocket, New, Resource,
 };
 
 pub struct State {
     globals: Vec<GlobalId>,
+}
+
+struct ShmPool {
+    file: File,
+}
+
+struct ShmBuffer {
+    pool: Arc<ShmPool>,
+    offset: u64,
+    width: i32,
+    height: i32,
+    stride: i32,
+}
+
+#[derive(Default)]
+struct SurfaceState {
+    pending_buffer: Mutex<Option<Arc<ShmBuffer>>>,
 }
 
 impl GlobalDispatch<wl_compositor::WlCompositor, ()> for State {
@@ -42,7 +62,7 @@ impl Dispatch<wl_compositor::WlCompositor, ()> for State {
     ) {
         match request {
             wl_compositor::Request::CreateSurface { id } => {
-                data_init.init::<wl_surface::WlSurface, _>(id, ());
+                data_init.init::<wl_surface::WlSurface, _>(id, Arc::new(SurfaceState::default()));
             }
             wl_compositor::Request::CreateRegion { id } => {
                 data_init.init::<wl_region::WlRegion, _>(id, ());
@@ -52,16 +72,43 @@ impl Dispatch<wl_compositor::WlCompositor, ()> for State {
     }
 }
 
-impl Dispatch<wl_surface::WlSurface, ()> for State {
+impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
     fn request(
         _state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &wl_surface::WlSurface,
-        _request: wl_surface::Request,
-        _data: &(),
+        request: wl_surface::Request,
+        data: &Arc<SurfaceState>,
         _handle: &DisplayHandle,
         _data_init: &mut DataInit<'_, Self>,
     ) {
+        match request {
+            wl_surface::Request::Attach { buffer, .. } => {
+                let buffer = buffer.and_then(|buffer| buffer.data::<Arc<ShmBuffer>>().cloned());
+                *data.pending_buffer.lock().expect("surface buffer lock") = buffer;
+            }
+            wl_surface::Request::Commit => {
+                if let Some(buffer) = data
+                    .pending_buffer
+                    .lock()
+                    .expect("surface buffer lock")
+                    .as_ref()
+                {
+                    let mut pixel = [0_u8; 4];
+                    match buffer.pool.file.read_at(&mut pixel, buffer.offset) {
+                        Ok(4) => log::info!(
+                            "shared buffer committed: {}x{} stride={} first_pixel={pixel:02x?}",
+                            buffer.width,
+                            buffer.height,
+                            buffer.stride
+                        ),
+                        Ok(bytes) => log::warn!("short shared buffer read: {bytes} bytes"),
+                        Err(error) => log::warn!("read shared buffer: {error}"),
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -103,35 +150,57 @@ impl Dispatch<wl_shm::WlShm, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        if let wl_shm::Request::CreatePool { id, .. } = request {
-            data_init.init::<wl_shm_pool::WlShmPool, _>(id, ());
+        if let wl_shm::Request::CreatePool { id, fd, .. } = request {
+            data_init.init::<wl_shm_pool::WlShmPool, _>(
+                id,
+                Arc::new(ShmPool {
+                    file: File::from(fd),
+                }),
+            );
         }
     }
 }
 
-impl Dispatch<wl_shm_pool::WlShmPool, ()> for State {
+impl Dispatch<wl_shm_pool::WlShmPool, Arc<ShmPool>> for State {
     fn request(
         _state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &wl_shm_pool::WlShmPool,
         request: wl_shm_pool::Request,
-        _data: &(),
+        data: &Arc<ShmPool>,
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        if let wl_shm_pool::Request::CreateBuffer { id, .. } = request {
-            data_init.init::<wl_buffer::WlBuffer, _>(id, ());
+        if let wl_shm_pool::Request::CreateBuffer {
+            id,
+            offset,
+            width,
+            height,
+            stride,
+            ..
+        } = request
+        {
+            data_init.init::<wl_buffer::WlBuffer, _>(
+                id,
+                Arc::new(ShmBuffer {
+                    pool: data.clone(),
+                    offset: offset as u64,
+                    width,
+                    height,
+                    stride,
+                }),
+            );
         }
     }
 }
 
-impl Dispatch<wl_buffer::WlBuffer, ()> for State {
+impl Dispatch<wl_buffer::WlBuffer, Arc<ShmBuffer>> for State {
     fn request(
         _state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &wl_buffer::WlBuffer,
         _request: wl_buffer::Request,
-        _data: &(),
+        _data: &Arc<ShmBuffer>,
         _handle: &DisplayHandle,
         _data_init: &mut DataInit<'_, Self>,
     ) {
