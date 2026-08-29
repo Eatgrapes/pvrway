@@ -1,0 +1,31 @@
+[package]
+name = "pvrway"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+android-activity = { version = "0.6.1", features = ["native-activity"] }
+android_logger = "0.15"
+khronos-egl = { version = "6", features = ["dynamic"] }
+libloading = "0.8"
+log = "0.4"
+ndk = "0.9"
+
+[package.metadata.android]
+package = "io.eatgrapes.pvrway"
+apk_name = "PvrWay"
+build_targets = ["aarch64-linux-android"]
+min_sdk_version = 26
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "PvrWay"
+theme = "@android:style/Theme.Material.NoActionBar"
+
+[package.metadata.android.application.activity]
+config_changes = "orientation|keyboardHidden|screenSize"
+orientation = "landscape"

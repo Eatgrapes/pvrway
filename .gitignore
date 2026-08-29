@@ -1,0 +1,7 @@
+/work/
+/.gradle/
+/build/
+/**/build/
+/**/target/
+/.idea/
+/*.apk
