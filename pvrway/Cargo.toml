@@ -14,6 +14,7 @@ khronos-egl = { version = "6", features = ["dynamic"] }
 libloading = "0.8"
 log = "0.4"
 ndk = "0.9"
+wayland-server = "0.31"
 
 [package.metadata.android]
 package = "io.eatgrapes.pvrway"
@@ -29,3 +30,7 @@ theme = "@android:style/Theme.Material.NoActionBar"
 [package.metadata.android.application.activity]
 config_changes = "orientation|keyboardHidden|screenSize"
 orientation = "landscape"
+
+[package.metadata.android.signing.release]
+path = "C:/Users/Administrator/.android/debug.keystore"
+keystore_password = "android"
