@@ -5,13 +5,15 @@ use std::time::Duration;
 
 use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_server::backend::ClientData;
+use wayland_server::backend::GlobalId;
 use wayland_server::protocol::{wl_compositor, wl_region, wl_surface};
 use wayland_server::{
     DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, ListeningSocket, New,
 };
 
-#[derive(Default)]
-pub struct State;
+pub struct State {
+    globals: Vec<GlobalId>,
+}
 
 impl GlobalDispatch<wl_compositor::WlCompositor, ()> for State {
     fn bind(
@@ -152,13 +154,19 @@ fn run(socket: ListeningSocket) {
             return;
         }
     };
-    display
-        .handle()
-        .create_global::<State, wl_compositor::WlCompositor, ()>(5, ());
-    display
-        .handle()
-        .create_global::<State, xdg_wm_base::XdgWmBase, ()>(6, ());
-    let mut state = State;
+    let mut state = State {
+        globals: Vec::new(),
+    };
+    state.globals.push(
+        display
+            .handle()
+            .create_global::<State, wl_compositor::WlCompositor, ()>(5, ()),
+    );
+    state.globals.push(
+        display
+            .handle()
+            .create_global::<State, xdg_wm_base::XdgWmBase, ()>(6, ()),
+    );
     let client_data: Arc<dyn ClientData> = Arc::new(());
 
     loop {
