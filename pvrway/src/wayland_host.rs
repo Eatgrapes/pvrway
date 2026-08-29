@@ -99,8 +99,14 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        if let xdg_wm_base::Request::GetXdgSurface { id, .. } = request {
-            data_init.init::<xdg_surface::XdgSurface, _>(id, ());
+        match request {
+            xdg_wm_base::Request::GetXdgSurface { id, .. } => {
+                data_init.init::<xdg_surface::XdgSurface, _>(id, ());
+            }
+            xdg_wm_base::Request::Pong { serial } => {
+                log::trace!("xdg_wm_base pong for serial {serial}");
+            }
+            _ => {}
         }
     }
 }
@@ -109,7 +115,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
     fn request(
         _state: &mut Self,
         _client: &wayland_server::Client,
-        _resource: &xdg_surface::XdgSurface,
+        resource: &xdg_surface::XdgSurface,
         request: xdg_surface::Request,
         _data: &(),
         _handle: &DisplayHandle,
@@ -117,6 +123,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
     ) {
         if let xdg_surface::Request::GetToplevel { id } = request {
             data_init.init::<xdg_toplevel::XdgToplevel, _>(id, ());
+            resource.configure(1);
         }
     }
 }
