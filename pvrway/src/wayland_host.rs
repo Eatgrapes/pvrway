@@ -7,8 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel, xdg_wm_base};
-use wayland_server::backend::ClientData;
-use wayland_server::backend::GlobalId;
+use wayland_server::backend::{ClientData, ClientId, DisconnectReason, GlobalId};
 use wayland_server::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_output, wl_region, wl_shm, wl_shm_pool, wl_surface,
 };
@@ -36,6 +35,15 @@ struct ShmBuffer {
 struct SurfaceState {
     pending_buffer: Mutex<Option<Arc<ShmBuffer>>>,
     frame_callbacks: Mutex<Vec<wl_callback::WlCallback>>,
+}
+
+#[derive(Debug)]
+struct ClientLog;
+
+impl ClientData for ClientLog {
+    fn disconnected(&self, client_id: ClientId, reason: DisconnectReason) {
+        log::warn!("Wayland client {client_id:?} disconnected: {reason:?}");
+    }
 }
 
 impl GlobalDispatch<wl_compositor::WlCompositor, ()> for State {
@@ -396,7 +404,7 @@ fn run(socket: ListeningSocket) {
             .handle()
             .create_global::<State, wl_output::WlOutput, ()>(3, ()),
     );
-    let client_data: Arc<dyn ClientData> = Arc::new(());
+    let client_data: Arc<dyn ClientData> = Arc::new(ClientLog);
 
     loop {
         while let Ok(Some(stream)) = socket.accept() {
