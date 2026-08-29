@@ -3,6 +3,7 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::mpsc::SyncSender;
 use std::thread;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ use wayland_server::{
 
 pub struct State {
     globals: Vec<GlobalId>,
+    frame_tx: SyncSender<()>,
 }
 
 struct ShmPool {
@@ -84,7 +86,7 @@ impl Dispatch<wl_compositor::WlCompositor, ()> for State {
 
 impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
     fn request(
-        _state: &mut Self,
+        state: &mut Self,
         _client: &wayland_server::Client,
         _resource: &wl_surface::WlSurface,
         request: wl_surface::Request,
@@ -133,6 +135,7 @@ impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
                 {
                     callback.done(0);
                 }
+                let _ = state.frame_tx.try_send(());
             }
             _ => {}
         }
@@ -361,19 +364,19 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
     }
 }
 
-pub fn spawn() -> Result<(), String> {
+pub fn spawn(frame_tx: SyncSender<()>) -> Result<(), String> {
     let socket = ListeningSocket::bind_absolute(PathBuf::from(
         "/data/user/0/io.eatgrapes.pvrway/files/pvrway.sock",
     ))
     .map_err(|error| format!("bind Wayland socket: {error:?}"))?;
     thread::Builder::new()
         .name("pvrway-wayland".to_string())
-        .spawn(move || run(socket))
+        .spawn(move || run(socket, frame_tx))
         .map_err(|error| format!("spawn Wayland server: {error}"))?;
     Ok(())
 }
 
-fn run(socket: ListeningSocket) {
+fn run(socket: ListeningSocket, frame_tx: SyncSender<()>) {
     let mut display = match Display::<State>::new() {
         Ok(display) => display,
         Err(error) => {
@@ -383,6 +386,7 @@ fn run(socket: ListeningSocket) {
     };
     let mut state = State {
         globals: Vec::new(),
+        frame_tx,
     };
     state.globals.push(
         display

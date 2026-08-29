@@ -1,6 +1,6 @@
 #![cfg(target_os = "android")]
 
-use std::sync::OnceLock;
+use std::sync::{OnceLock, mpsc};
 use std::time::Duration;
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
@@ -22,11 +22,12 @@ fn android_main(app: AndroidApp) {
     let mut destroyed = false;
     let mut egl_host = None;
     let mut wayland_started = false;
+    let (frame_tx, frame_rx) = mpsc::sync_channel(1);
     while !destroyed {
         app.poll_events(Some(Duration::from_millis(100)), |event| match event {
             PollEvent::Main(MainEvent::InitWindow { .. }) => {
                 if !wayland_started {
-                    match wayland_host::spawn() {
+                    match wayland_host::spawn(frame_tx.clone()) {
                         Ok(()) => {
                             wayland_started = true;
                             log::info!("Wayland socket ready in the PvrWay app directory");
@@ -56,6 +57,15 @@ fn android_main(app: AndroidApp) {
 
         if let Ok(mut input) = app.input_events_iter() {
             while input.next(|_| InputStatus::Unhandled) {}
+        }
+
+        if frame_rx.try_recv().is_ok() {
+            if let Some(host) = &egl_host {
+                match host.present_wayland_frame() {
+                    Ok(()) => log::info!("presented a Wayland frame through PowerVR EGL"),
+                    Err(error) => log::warn!("present Wayland frame: {error}"),
+                }
+            }
         }
     }
 

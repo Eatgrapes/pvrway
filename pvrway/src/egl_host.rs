@@ -99,6 +99,28 @@ impl EglHost {
             context,
         })
     }
+
+    pub fn present_wayland_frame(&self) -> Result<(), String> {
+        let gles = unsafe {
+            // SAFETY: Android exposes the OpenGL ES 2 ABI to NativeActivity applications.
+            Library::new("libGLESv2.so")
+        }
+        .map_err(|error| format!("load libGLESv2: {error}"))?;
+        unsafe {
+            // SAFETY: The EGL context belongs to the Android main thread and remains current while the window lives.
+            let clear_color = gles
+                .get::<unsafe extern "C" fn(f32, f32, f32, f32)>(b"glClearColor\0")
+                .map_err(|error| format!("load glClearColor: {error}"))?;
+            let clear = gles
+                .get::<unsafe extern "C" fn(u32)>(b"glClear\0")
+                .map_err(|error| format!("load glClear: {error}"))?;
+            clear_color(0.20, 0.06, 0.36, 1.0);
+            clear(GL_COLOR_BUFFER_BIT);
+        }
+        self.egl
+            .swap_buffers(self.display, self.surface)
+            .map_err(|error| format!("present Wayland frame: {error:?}"))
+    }
 }
 
 impl Drop for EglHost {
