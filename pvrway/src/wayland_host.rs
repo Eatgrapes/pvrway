@@ -61,6 +61,7 @@ impl Dispatch<wl_compositor::WlCompositor, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
+        log::info!("compositor request: {request:?}");
         match request {
             wl_compositor::Request::CreateSurface { id } => {
                 data_init.init::<wl_surface::WlSurface, _>(id, Arc::new(SurfaceState::default()));
@@ -83,6 +84,7 @@ impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
+        log::info!("surface request: {request:?}");
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
                 let buffer = buffer.and_then(|buffer| buffer.data::<Arc<ShmBuffer>>().cloned());
