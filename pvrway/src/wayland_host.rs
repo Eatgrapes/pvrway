@@ -6,7 +6,9 @@ use std::time::Duration;
 use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_server::backend::ClientData;
 use wayland_server::backend::GlobalId;
-use wayland_server::protocol::{wl_compositor, wl_region, wl_surface};
+use wayland_server::protocol::{
+    wl_buffer, wl_compositor, wl_region, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_server::{
     DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, ListeningSocket, New,
 };
@@ -69,6 +71,66 @@ impl Dispatch<wl_region::WlRegion, ()> for State {
         _client: &wayland_server::Client,
         _resource: &wl_region::WlRegion,
         _request: wl_region::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        _data_init: &mut DataInit<'_, Self>,
+    ) {
+    }
+}
+
+impl GlobalDispatch<wl_shm::WlShm, ()> for State {
+    fn bind(
+        _state: &mut Self,
+        _handle: &DisplayHandle,
+        _client: &wayland_server::Client,
+        resource: New<wl_shm::WlShm>,
+        _global_data: &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        let resource = data_init.init(resource, ());
+        resource.format(wl_shm::Format::Argb8888);
+        resource.format(wl_shm::Format::Xrgb8888);
+    }
+}
+
+impl Dispatch<wl_shm::WlShm, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &wl_shm::WlShm,
+        request: wl_shm::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_shm::Request::CreatePool { id, .. } = request {
+            data_init.init::<wl_shm_pool::WlShmPool, _>(id, ());
+        }
+    }
+}
+
+impl Dispatch<wl_shm_pool::WlShmPool, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &wl_shm_pool::WlShmPool,
+        request: wl_shm_pool::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_shm_pool::Request::CreateBuffer { id, .. } = request {
+            data_init.init::<wl_buffer::WlBuffer, _>(id, ());
+        }
+    }
+}
+
+impl Dispatch<wl_buffer::WlBuffer, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &wl_buffer::WlBuffer,
+        _request: wl_buffer::Request,
         _data: &(),
         _handle: &DisplayHandle,
         _data_init: &mut DataInit<'_, Self>,
@@ -173,6 +235,11 @@ fn run(socket: ListeningSocket) {
         display
             .handle()
             .create_global::<State, xdg_wm_base::XdgWmBase, ()>(6, ()),
+    );
+    state.globals.push(
+        display
+            .handle()
+            .create_global::<State, wl_shm::WlShm, ()>(1, ()),
     );
     let client_data: Arc<dyn ClientData> = Arc::new(());
 
