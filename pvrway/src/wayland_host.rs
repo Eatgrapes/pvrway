@@ -404,8 +404,10 @@ fn run(socket: ListeningSocket) {
                 log::warn!("accept Wayland client: {error}");
             }
         }
-        if let Err(error) = display.dispatch_clients(&mut state) {
-            log::warn!("dispatch Wayland clients: {error}");
+        match display.dispatch_clients(&mut state) {
+            Ok(count) if count > 0 => log::info!("dispatched {count} Wayland requests"),
+            Ok(_) => {}
+            Err(error) => log::warn!("dispatch Wayland clients: {error}"),
         }
         if let Err(error) = display.flush_clients() {
             log::warn!("flush Wayland clients: {error}");
