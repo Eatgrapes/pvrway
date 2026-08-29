@@ -182,6 +182,7 @@ impl Dispatch<wl_shm::WlShm, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
+        log::info!("shm request: {request:?}");
         if let wl_shm::Request::CreatePool { id, fd, .. } = request {
             data_init.init::<wl_shm_pool::WlShmPool, _>(
                 id,
@@ -203,6 +204,7 @@ impl Dispatch<wl_shm_pool::WlShmPool, Arc<ShmPool>> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
+        log::info!("shm pool request: {request:?}");
         if let wl_shm_pool::Request::CreateBuffer {
             id,
             offset,
@@ -306,6 +308,7 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
+        log::info!("xdg_wm_base request: {request:?}");
         match request {
             xdg_wm_base::Request::GetXdgSurface { id, .. } => {
                 data_init.init::<xdg_surface::XdgSurface, _>(id, ());
@@ -328,6 +331,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
+        log::info!("xdg_surface request: {request:?}");
         if let xdg_surface::Request::GetToplevel { id } = request {
             let toplevel = data_init.init::<xdg_toplevel::XdgToplevel, _>(id, ());
             toplevel.configure(720, 1504, Vec::new());
