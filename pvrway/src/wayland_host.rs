@@ -253,7 +253,8 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
         data_init: &mut DataInit<'_, Self>,
     ) {
         if let xdg_surface::Request::GetToplevel { id } = request {
-            data_init.init::<xdg_toplevel::XdgToplevel, _>(id, ());
+            let toplevel = data_init.init::<xdg_toplevel::XdgToplevel, _>(id, ());
+            toplevel.configure(720, 1504, Vec::new());
             resource.configure(1);
         }
     }
