@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_server::backend::ClientData;
 use wayland_server::protocol::{wl_compositor, wl_region, wl_surface};
 use wayland_server::{
@@ -73,6 +74,64 @@ impl Dispatch<wl_region::WlRegion, ()> for State {
     }
 }
 
+impl GlobalDispatch<xdg_wm_base::XdgWmBase, ()> for State {
+    fn bind(
+        _state: &mut Self,
+        _handle: &DisplayHandle,
+        _client: &wayland_server::Client,
+        resource: New<xdg_wm_base::XdgWmBase>,
+        _global_data: &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        data_init.init(resource, ());
+    }
+}
+
+impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &xdg_wm_base::XdgWmBase,
+        request: xdg_wm_base::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let xdg_wm_base::Request::GetXdgSurface { id, .. } = request {
+            data_init.init::<xdg_surface::XdgSurface, _>(id, ());
+        }
+    }
+}
+
+impl Dispatch<xdg_surface::XdgSurface, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &xdg_surface::XdgSurface,
+        request: xdg_surface::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let xdg_surface::Request::GetToplevel { id } = request {
+            data_init.init::<xdg_toplevel::XdgToplevel, _>(id, ());
+        }
+    }
+}
+
+impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &xdg_toplevel::XdgToplevel,
+        _request: xdg_toplevel::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        _data_init: &mut DataInit<'_, Self>,
+    ) {
+    }
+}
+
 pub fn spawn() -> Result<(), String> {
     let socket = ListeningSocket::bind_absolute(PathBuf::from(
         "/data/user/0/io.eatgrapes.pvrway/files/pvrway.sock",
@@ -96,6 +155,9 @@ fn run(socket: ListeningSocket) {
     display
         .handle()
         .create_global::<State, wl_compositor::WlCompositor, ()>(5, ());
+    display
+        .handle()
+        .create_global::<State, xdg_wm_base::XdgWmBase, ()>(6, ());
     let mut state = State;
     let client_data: Arc<dyn ClientData> = Arc::new(());
 
