@@ -10,7 +10,7 @@ use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel, xdg_wm_ba
 use wayland_server::backend::ClientData;
 use wayland_server::backend::GlobalId;
 use wayland_server::protocol::{
-    wl_buffer, wl_compositor, wl_region, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_output, wl_region, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_server::{
     DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, ListeningSocket, New, Resource,
@@ -207,6 +207,50 @@ impl Dispatch<wl_buffer::WlBuffer, Arc<ShmBuffer>> for State {
     }
 }
 
+impl GlobalDispatch<wl_output::WlOutput, ()> for State {
+    fn bind(
+        _state: &mut Self,
+        _handle: &DisplayHandle,
+        _client: &wayland_server::Client,
+        resource: New<wl_output::WlOutput>,
+        _global_data: &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        let resource = data_init.init(resource, ());
+        resource.geometry(
+            0,
+            0,
+            160,
+            72,
+            wl_output::Subpixel::Unknown,
+            "PvrWay".to_string(),
+            "Redmi 9A".to_string(),
+            wl_output::Transform::Normal,
+        );
+        resource.mode(
+            wl_output::Mode::Current | wl_output::Mode::Preferred,
+            1600,
+            720,
+            60_000,
+        );
+        resource.scale(1);
+        resource.done();
+    }
+}
+
+impl Dispatch<wl_output::WlOutput, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &wl_output::WlOutput,
+        _request: wl_output::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        _data_init: &mut DataInit<'_, Self>,
+    ) {
+    }
+}
+
 impl GlobalDispatch<xdg_wm_base::XdgWmBase, ()> for State {
     fn bind(
         _state: &mut Self,
@@ -310,6 +354,11 @@ fn run(socket: ListeningSocket) {
         display
             .handle()
             .create_global::<State, wl_shm::WlShm, ()>(1, ()),
+    );
+    state.globals.push(
+        display
+            .handle()
+            .create_global::<State, wl_output::WlOutput, ()>(3, ()),
     );
     let client_data: Arc<dyn ClientData> = Arc::new(());
 
