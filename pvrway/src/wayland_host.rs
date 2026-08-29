@@ -10,7 +10,7 @@ use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel, xdg_wm_ba
 use wayland_server::backend::ClientData;
 use wayland_server::backend::GlobalId;
 use wayland_server::protocol::{
-    wl_buffer, wl_compositor, wl_output, wl_region, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_output, wl_region, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_server::{
     DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, ListeningSocket, New, Resource,
@@ -35,6 +35,7 @@ struct ShmBuffer {
 #[derive(Default)]
 struct SurfaceState {
     pending_buffer: Mutex<Option<Arc<ShmBuffer>>>,
+    frame_callbacks: Mutex<Vec<wl_callback::WlCallback>>,
 }
 
 impl GlobalDispatch<wl_compositor::WlCompositor, ()> for State {
@@ -80,12 +81,20 @@ impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
         request: wl_surface::Request,
         data: &Arc<SurfaceState>,
         _handle: &DisplayHandle,
-        _data_init: &mut DataInit<'_, Self>,
+        data_init: &mut DataInit<'_, Self>,
     ) {
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
                 let buffer = buffer.and_then(|buffer| buffer.data::<Arc<ShmBuffer>>().cloned());
+                log::info!("surface attach: shared_memory={}", buffer.is_some());
                 *data.pending_buffer.lock().expect("surface buffer lock") = buffer;
+            }
+            wl_surface::Request::Frame { callback } => {
+                let callback = data_init.init::<wl_callback::WlCallback, _>(callback, ());
+                data.frame_callbacks
+                    .lock()
+                    .expect("surface callbacks lock")
+                    .push(callback);
             }
             wl_surface::Request::Commit => {
                 if let Some(buffer) = data
@@ -106,9 +115,30 @@ impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
                         Err(error) => log::warn!("read shared buffer: {error}"),
                     }
                 }
+                for callback in data
+                    .frame_callbacks
+                    .lock()
+                    .expect("surface callbacks lock")
+                    .drain(..)
+                {
+                    callback.done(0);
+                }
             }
             _ => {}
         }
+    }
+}
+
+impl Dispatch<wl_callback::WlCallback, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &wl_callback::WlCallback,
+        _request: wl_callback::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        _data_init: &mut DataInit<'_, Self>,
+    ) {
     }
 }
 
