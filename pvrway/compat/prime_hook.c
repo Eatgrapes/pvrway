@@ -118,6 +118,26 @@ int drmGetDeviceFromDevId(dev_t dev_id, uint32_t flags, drmDevicePtr *device) {
     return result;
 }
 
+int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle) {
+    struct fake_buffer *buffer = find_buffer_fd(prime_fd);
+    if (!buffer) {
+        errno = ENOENT;
+        return -1;
+    }
+    *handle = buffer->handle;
+    return 0;
+}
+
+int drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd) {
+    struct fake_buffer *buffer = find_buffer(handle);
+    if (!buffer) {
+        errno = ENOENT;
+        return -1;
+    }
+    *prime_fd = dup(buffer->fd);
+    return *prime_fd < 0 ? -1 : 0;
+}
+
 int ioctl(int fd, unsigned long request, ...) {
     static int (*real_ioctl)(int, unsigned long, void *);
     if (!real_ioctl)

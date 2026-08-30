@@ -105,7 +105,7 @@ export WAYLAND_DISPLAY=pvrway-proxy.sock
 for pid in $(pidof Hyprland 2>/dev/null || true); do kill "$pid" 2>/dev/null || true; done
 rm -f "$root/run/user/1001/wayland-1" "$root/run/user/1001/wayland-1.lock"
 "$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c \
-    "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=pvrway-proxy.sock LD_PRELOAD=/tmp/pvrway-prime-hook.so LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=llvmpipe GALLIUM_DRIVER=llvmpipe WLR_BACKENDS=wayland WLR_RENDERER=gles2 WLR_NO_HARDWARE_CURSORS=1 WLR_LIBINPUT_NO_DEVICES=1 nohup Hyprland >/tmp/hyprland.log 2>&1 &"
+    "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=pvrway-proxy.sock LD_PRELOAD=/tmp/pvrway-prime-hook.so LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=llvmpipe GALLIUM_DRIVER=llvmpipe AQ_FORCE_LINEAR_BLIT=1 AQ_NO_MODIFIERS=1 AQ_NO_ATOMIC=1 WLR_BACKENDS=wayland WLR_RENDERER=gles2 WLR_NO_HARDWARE_CURSORS=1 WLR_LIBINPUT_NO_DEVICES=1 nohup Hyprland >/tmp/hyprland.log 2>&1 &"
 
 while [ ! -S "$root/run/user/1001/wayland-1" ]; do sleep 1; done
 while :; do
