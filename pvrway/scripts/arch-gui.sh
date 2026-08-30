@@ -22,6 +22,28 @@ mkdir -p "$root/etc/sudoers.d"
 printf '%s\n' 'Eatgrapes ALL=(ALL:ALL) ALL' > "$root/etc/sudoers.d/eatgrapes"
 chmod 440 "$root/etc/sudoers.d/eatgrapes"
 
+hypr_config="$root/home/Eatgrapes/.config/hypr/hyprland.conf"
+mkdir -p "$(dirname "$hypr_config")"
+if [ ! -f "$hypr_config" ]; then
+    printf '%s\n' \
+        'monitor=,preferred,auto,1' \
+        'env = WLR_BACKENDS,wayland' \
+        'env = WLR_RENDERER,gles2' \
+        'env = WLR_NO_HARDWARE_CURSORS,1' \
+        'env = WLR_LIBINPUT_NO_DEVICES,1' \
+        'env = XDG_CURRENT_DESKTOP,Hyprland' \
+        'general { gaps_in = 4; gaps_out = 8; border_size = 2; col.active_border = rgba(9b6cffee); col.inactive_border = rgba(3b2b55aa) }' \
+        'decoration { rounding = 8 }' \
+        'misc { disable_hyprland_logo = true; disable_splash_rendering = true; vfr = false }' \
+        'input { kb_layout = us }' \
+        'exec-once = waybar' \
+        'exec-once = foot' \
+        'bind = SUPER, RETURN, exec, foot' \
+        'bind = SUPER, Q, killactive' \
+        'bind = SUPER, M, exit' > "$hypr_config"
+    chown -R 1001:1001 "$root/home/Eatgrapes/.config"
+fi
+
 if [ ! -f "$root/var/lib/pvrway/base-tools" ]; then
     mkdir -p "$root/var/lib/pvrway"
     if "$chroot" "$root" /usr/bin/pacman -Sy --needed --noconfirm \
@@ -59,4 +81,9 @@ rm -f "$root/run/user/1001/pvrway-proxy.sock" "$root/run/user/1001/pvrway-proxy.
 
 export XDG_RUNTIME_DIR=/run/user/1001
 export WAYLAND_DISPLAY=pvrway-proxy.sock
-exec "$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=pvrway-proxy.sock weston-terminal"
+if "$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c \
+    "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=pvrway-proxy.sock WLR_BACKENDS=wayland WLR_RENDERER=gles2 WLR_NO_HARDWARE_CURSORS=1 WLR_LIBINPUT_NO_DEVICES=1 Hyprland"; then
+    exit 0
+fi
+exec "$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c \
+    "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=pvrway-proxy.sock weston-terminal"
