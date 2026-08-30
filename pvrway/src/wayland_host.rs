@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::os::unix::fs::FileExt;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::AsFd;
 use std::os::unix::net::UnixListener;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -11,21 +12,24 @@ use std::time::Duration;
 use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_server::backend::{ClientData, ClientId, DisconnectReason, GlobalId};
 use wayland_server::protocol::{
-    wl_buffer, wl_callback, wl_compositor, wl_output, wl_pointer, wl_region, wl_seat, wl_shm,
-    wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_region, wl_seat,
+    wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_server::{
     DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, ListeningSocket, New, Resource,
 };
 
 use crate::frame_protocol::CommittedFrame;
-use crate::input_protocol::{PROXY_INPUT_SOCKET, PointerAction, PointerPacket, read_pointer};
+use crate::input_protocol::{
+    InputPacket, PROXY_INPUT_SOCKET, PointerAction, PointerPacket, read_input,
+};
 
 pub struct State {
     globals: Vec<GlobalId>,
     frame_tx: SyncSender<CommittedFrame>,
-    input_rx: Receiver<PointerPacket>,
+    input_rx: Receiver<InputPacket>,
     pointers: Vec<wl_pointer::WlPointer>,
+    keyboards: Vec<wl_keyboard::WlKeyboard>,
     active_surface: Option<wl_surface::WlSurface>,
     serial: u32,
 }
@@ -127,6 +131,10 @@ impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
             }
             wl_surface::Request::Commit => {
                 state.active_surface = Some(_resource.clone());
+                state.serial = state.serial.wrapping_add(1);
+                for keyboard in &state.keyboards {
+                    keyboard.enter(state.serial, _resource, Vec::new());
+                }
                 if let Some(buffer) = data
                     .pending_buffer
                     .lock()
@@ -300,8 +308,8 @@ impl GlobalDispatch<wl_seat::WlSeat, ()> for State {
         data_init: &mut DataInit<'_, Self>,
     ) {
         let resource = data_init.init(resource, ());
-        resource.capabilities(wl_seat::Capability::Pointer);
-        resource.name("PvrWay touch pointer".to_string());
+        resource.capabilities(wl_seat::Capability::Pointer | wl_seat::Capability::Keyboard);
+        resource.name("PvrWay touch and keyboard".to_string());
     }
 }
 
@@ -315,11 +323,60 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        if let wl_seat::Request::GetPointer { id } = request {
-            let pointer = data_init.init::<wl_pointer::WlPointer, _>(id, ());
-            state.pointers.push(pointer);
+        match request {
+            wl_seat::Request::GetPointer { id } => {
+                let pointer = data_init.init::<wl_pointer::WlPointer, _>(id, ());
+                state.pointers.push(pointer);
+            }
+            wl_seat::Request::GetKeyboard { id } => {
+                let keyboard = data_init.init::<wl_keyboard::WlKeyboard, _>(id, ());
+                if let Err(error) = send_keymap(&keyboard) {
+                    log::warn!("send keyboard keymap: {error}");
+                }
+                if let Some(surface) = state.active_surface.clone() {
+                    keyboard.enter(state.serial, &surface, Vec::new());
+                }
+                state.keyboards.push(keyboard);
+            }
+            _ => {}
         }
     }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &wl_keyboard::WlKeyboard,
+        _request: wl_keyboard::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        _data_init: &mut DataInit<'_, Self>,
+    ) {
+    }
+}
+
+fn send_keymap(keyboard: &wl_keyboard::WlKeyboard) -> std::io::Result<()> {
+    let path = "/tmp/pvrway-keymap.xkb";
+    let keymap = r#"xkb_keymap {
+ xkb_keycodes "evdev" { minimum = 8; maximum = 255; };
+ xkb_types "complete" { virtual_modifiers NumLock; type "PC_SUPER_LEVEL2" { modifiers = Shift+NumLock; map[None] = Level1; map[Shift] = Level2; map[NumLock] = Level2; map[Shift+NumLock] = Level1; level_name[Level1] = "Base"; level_name[Level2] = "Shift"; }; };
+ xkb_compatibility "complete" { interpret Shift_L+AnyOfOrNone(all) { action = SetMods(modifiers=Shift); }; interpret Shift_R+AnyOfOrNone(all) { action = SetMods(modifiers=Shift); }; };
+ xkb_symbols "pc" {
+  key <ESC> { [ Escape ] }; key <AE01> { [ 1, exclam ] }; key <AE02> { [ 2, at ] }; key <AE03> { [ 3, numbersign ] }; key <AE04> { [ 4, dollar ] }; key <AE05> { [ 5, percent ] }; key <AE06> { [ 6, asciicircum ] }; key <AE07> { [ 7, ampersand ] }; key <AE08> { [ 8, asterisk ] }; key <AE09> { [ 9, parenleft ] }; key <AE10> { [ 0, parenright ] };
+  key <AD01> { [ q, Q ] }; key <AD02> { [ w, W ] }; key <AD03> { [ e, E ] }; key <AD04> { [ r, R ] }; key <AD05> { [ t, T ] }; key <AD06> { [ y, Y ] }; key <AD07> { [ u, U ] }; key <AD08> { [ i, I ] }; key <AD09> { [ o, O ] }; key <AD10> { [ p, P ] };
+  key <AC01> { [ a, A ] }; key <AC02> { [ s, S ] }; key <AC03> { [ d, D ] }; key <AC04> { [ f, F ] }; key <AC05> { [ g, G ] }; key <AC06> { [ h, H ] }; key <AC07> { [ j, J ] }; key <AC08> { [ k, K ] }; key <AC09> { [ l, L ] };
+  key <AB01> { [ z, Z ] }; key <AB02> { [ x, X ] }; key <AB03> { [ c, C ] }; key <AB04> { [ v, V ] }; key <AB05> { [ b, B ] }; key <AB06> { [ n, N ] }; key <AB07> { [ m, M ] };
+  key <AC11> { [ apostrophe, quotedbl ] }; key <AB08> { [ comma, less ] }; key <AB09> { [ period, greater ] }; key <AB10> { [ slash, question ] }; key <BKSL> { [ backslash, bar ] }; key <SPCE> { [ space ] }; key <TAB> { [ Tab ] }; key <RTRN> { [ Return ] }; key <BKSP> { [ BackSpace ] };
+  key <LFSH> { [ Shift_L ] }; key <RTSH> { [ Shift_R ] }; key <LCTL> { [ Control_L ] }; key <RCTL> { [ Control_R ] }; key <LALT> { [ Alt_L ] }; key <RALT> { [ Alt_R ] }; key <UP> { [ Up ] }; key <DOWN> { [ Down ] }; key <LEFT> { [ Left ] }; key <RGHT> { [ Right ] };
+ };
+};
+"#;
+    std::fs::write(path, keymap.as_bytes())?;
+    let file = File::open(path)?;
+    let size = file.metadata()?.len() as u32;
+    keyboard.keymap(wl_keyboard::KeymapFormat::XkbV1, file.as_fd(), size);
+    Ok(())
 }
 
 impl Dispatch<wl_pointer::WlPointer, ()> for State {
@@ -456,7 +513,7 @@ pub fn run_foreground(frame_tx: SyncSender<CommittedFrame>) -> Result<(), String
 fn run(
     socket: ListeningSocket,
     frame_tx: SyncSender<CommittedFrame>,
-    input_rx: Receiver<PointerPacket>,
+    input_rx: Receiver<InputPacket>,
 ) {
     let mut display = match Display::<State>::new() {
         Ok(display) => display,
@@ -470,6 +527,7 @@ fn run(
         frame_tx,
         input_rx,
         pointers: Vec::new(),
+        keyboards: Vec::new(),
         active_surface: None,
         serial: 1,
     };
@@ -523,13 +581,21 @@ fn run(
             log::warn!("flush Wayland clients: {error}");
         }
         while let Ok(packet) = state.input_rx.try_recv() {
-            state.dispatch_pointer(packet);
+            state.dispatch_input(packet);
         }
         thread::sleep(Duration::from_millis(4));
     }
 }
 
 impl State {
+    fn dispatch_input(&mut self, packet: InputPacket) {
+        if let InputPacket::Pointer(packet) = packet {
+            self.dispatch_pointer(packet);
+        } else if let InputPacket::Key(packet) = packet {
+            self.dispatch_key(packet);
+        }
+    }
+
     fn dispatch_pointer(&mut self, packet: PointerPacket) {
         let Some(surface) = self.active_surface.clone() else {
             return;
@@ -568,9 +634,21 @@ impl State {
             }
         }
     }
+
+    fn dispatch_key(&mut self, packet: crate::input_protocol::KeyPacket) {
+        self.serial = self.serial.wrapping_add(1);
+        let state = if packet.pressed {
+            wl_keyboard::KeyState::Pressed
+        } else {
+            wl_keyboard::KeyState::Released
+        };
+        for keyboard in &self.keyboards {
+            keyboard.key(self.serial, packet.time, packet.key, state);
+        }
+    }
 }
 
-fn spawn_input_receiver() -> Result<Receiver<PointerPacket>, String> {
+fn spawn_input_receiver() -> Result<Receiver<InputPacket>, String> {
     let _ = fs::remove_file(PROXY_INPUT_SOCKET);
     let listener = UnixListener::bind(PROXY_INPUT_SOCKET)
         .map_err(|error| format!("bind input socket: {error}"))?;
@@ -581,7 +659,7 @@ fn spawn_input_receiver() -> Result<Receiver<PointerPacket>, String> {
         .name("pvrway-input-receiver".to_string())
         .spawn(move || {
             for connection in listener.incoming() {
-                match connection.and_then(read_pointer) {
+                match connection.and_then(read_input) {
                     Ok(packet) => {
                         let _ = input_tx.try_send(packet);
                     }

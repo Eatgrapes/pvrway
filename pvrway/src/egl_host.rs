@@ -25,7 +25,18 @@ varying vec2 texture_position;
 uniform sampler2D frame_texture;
 
 void main() {
-    gl_FragColor = vec4(texture2D(frame_texture, texture_position).rgb, 1.0);
+    vec4 color = texture2D(frame_texture, texture_position);
+    if (texture_position.x > 0.91 && texture_position.y > 0.88) {
+        vec2 button = (texture_position - vec2(0.91, 0.88)) / vec2(0.09, 0.12);
+        float edge = step(0.08, button.x) * step(0.08, button.y)
+            * step(button.x, 0.92) * step(button.y, 0.92);
+        color.rgb = mix(color.rgb, vec3(0.38, 0.16, 0.72), edge * 0.9);
+        float row = step(0.30, button.y) * step(button.y, 0.38)
+            + step(0.46, button.y) * step(button.y, 0.54)
+            + step(0.62, button.y) * step(button.y, 0.70);
+        color.rgb = mix(color.rgb, vec3(0.92, 0.86, 1.0), min(row, 1.0) * edge);
+    }
+    gl_FragColor = vec4(color.rgb, 1.0);
 }
 "#;
 
