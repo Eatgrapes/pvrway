@@ -56,6 +56,18 @@ fn android_main(app: AndroidApp) {
             _ => {}
         });
 
+        if egl_host.is_none() {
+            if let Some(window) = app.native_window() {
+                match egl_host::EglHost::new(&window) {
+                    Ok(host) => {
+                        egl_host = Some(host);
+                        log::info!("PowerVR EGL host recovered");
+                    }
+                    Err(error) => log::debug!("EGL host recovery pending: {error}"),
+                }
+            }
+        }
+
         if let Ok(mut input) = app.input_events_iter() {
             while input.next(|event| match event {
                 InputEvent::MotionEvent(event) => {

@@ -8,10 +8,11 @@ rust-version = "1.85"
 crate-type = ["cdylib"]
 
 [features]
-proxy = ["dep:wayland-server", "dep:wayland-protocols"]
+proxy = ["dep:libc", "dep:wayland-server", "dep:wayland-protocols"]
 
 [dependencies]
 log = "0.4"
+libc = { version = "0.2", optional = true }
 wayland-server = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.31.2", features = ["server", "unstable"], optional = true }
 

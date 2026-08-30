@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -15,6 +16,12 @@ pub fn spawn() -> Receiver<CommittedFrame> {
                 let _ = fs::remove_file(ANDROID_FRAME_SOCKET);
                 match UnixListener::bind(ANDROID_FRAME_SOCKET) {
                     Ok(listener) => {
+                        if let Err(error) = fs::set_permissions(
+                            ANDROID_FRAME_SOCKET,
+                            fs::Permissions::from_mode(0o666),
+                        ) {
+                            log::warn!("set frame socket permissions: {error}");
+                        }
                         log::info!("frame receiver ready at {ANDROID_FRAME_SOCKET}");
                         for connection in listener.incoming() {
                             match connection.and_then(read_frame) {

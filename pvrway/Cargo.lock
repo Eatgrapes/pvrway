@@ -419,6 +419,7 @@ dependencies = [
  "android_logger",
  "glow",
  "khronos-egl",
+ "libc",
  "libloading",
  "log",
  "ndk",

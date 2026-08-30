@@ -33,14 +33,23 @@ if [ ! -f "$hypr_config" ]; then
         'env = WLR_LIBINPUT_NO_DEVICES,1' \
         'env = XDG_CURRENT_DESKTOP,Hyprland' \
         'general { gaps_in = 4; gaps_out = 8; border_size = 2; col.active_border = rgba(9b6cffee); col.inactive_border = rgba(3b2b55aa) }' \
-        'decoration { rounding = 8 }' \
-        'misc { disable_hyprland_logo = true; disable_splash_rendering = true; vfr = false }' \
+        'decoration {' \
+        '    rounding = 8' \
+        '    blur {' \
+        '        enabled = false' \
+        '    }' \
+        '}' \
+        'misc {' \
+        '    disable_hyprland_logo = true' \
+        '    disable_splash_rendering = true' \
+        '}' \
         'input { kb_layout = us }' \
         'bind = SUPER, RETURN, exec, foot' \
         'bind = SUPER, Q, killactive' \
         'bind = SUPER, M, exit' > "$hypr_config"
     chown -R 1001:1001 "$root/home/Eatgrapes/.config"
 fi
+sed -i '/blur { enabled = false }/d; /vfr = false/d; /debug { disable_logs = false; enable_stdout_logs = true }/d' "$hypr_config"
 
 if [ ! -f "$root/var/lib/pvrway/base-tools" ]; then
     mkdir -p "$root/var/lib/pvrway"
@@ -115,9 +124,9 @@ while :; do
 done
 hypr_socket=${hypr_socket#"$root"}
 sleep 3
-printf '%s' 'output create headless PVR' | "$chroot" "$root" /system/bin/nc -U "$hypr_socket"
-printf '%s' 'keyword monitor PVR,1600x720@60,0x0,1' | "$chroot" "$root" /system/bin/nc -U "$hypr_socket"
-printf '%s' 'keyword monitor WAYLAND-1,1600x720@60,0x0,1,mirror,PVR' | "$chroot" "$root" /system/bin/nc -U "$hypr_socket"
+printf '%s' 'keyword monitor WAYLAND-1,1600x720@60,0x0,1' | "$chroot" "$root" /system/bin/nc -U "$hypr_socket" || true
+printf '%s' 'dispatch moveworkspacetomonitor 1 WAYLAND-1' | "$chroot" "$root" /system/bin/nc -U "$hypr_socket" || true
+sleep 2
 
 "$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c \
     "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1 nohup foot >/tmp/foot.log 2>&1 &"

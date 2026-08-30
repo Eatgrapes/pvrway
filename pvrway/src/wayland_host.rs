@@ -3,6 +3,7 @@ use std::os::unix::fs::FileExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsFd;
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -50,6 +51,7 @@ struct ShmBuffer {
     width: i32,
     height: i32,
     stride: i32,
+    dma_buf: bool,
 }
 
 #[derive(Default)]
@@ -67,6 +69,65 @@ struct DmabufPlane {
 struct AttachedBuffer {
     resource: wl_buffer::WlBuffer,
     data: Arc<ShmBuffer>,
+}
+
+fn read_shared_memory(file: &File, offset: u64, length: usize) -> std::io::Result<Vec<u8>> {
+    let mut pixels = vec![0_u8; length];
+    let mut read = 0_usize;
+    while read < length {
+        let bytes = file.read_at(&mut pixels[read..], offset + read as u64)?;
+        if bytes == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "shared buffer ended early",
+            ));
+        }
+        read += bytes;
+    }
+    Ok(pixels)
+}
+
+fn map_dma_buf(file: &File, offset: u64, length: usize) -> std::io::Result<Vec<u8>> {
+    let page_size = unsafe {
+        // SAFETY: sysconf has no pointer arguments and does not retain process state.
+        libc::sysconf(libc::_SC_PAGESIZE)
+    };
+    if page_size <= 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let page_size = page_size as u64;
+    let map_offset = offset / page_size * page_size;
+    let delta = (offset - map_offset) as usize;
+    let map_length = delta
+        .checked_add(length)
+        .ok_or_else(|| std::io::Error::other("dma-buf mapping length overflow"))?;
+    let address = unsafe {
+        // SAFETY: The fd remains open for the mapping lifetime, the offset is page-aligned,
+        // and the returned region is only read before being unmapped below.
+        libc::mmap(
+            std::ptr::null_mut(),
+            map_length,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            file.as_raw_fd(),
+            map_offset as libc::off_t,
+        )
+    };
+    if address == libc::MAP_FAILED {
+        return Err(std::io::Error::last_os_error());
+    }
+    let pixels = unsafe {
+        // SAFETY: mmap returned a valid map_length region and delta + length is in bounds.
+        std::slice::from_raw_parts(address.cast::<u8>().add(delta), length).to_vec()
+    };
+    let result = unsafe {
+        // SAFETY: address and map_length exactly match the successful mapping above.
+        libc::munmap(address, map_length)
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(pixels)
 }
 
 #[derive(Default)]
@@ -528,6 +589,7 @@ impl
                                 width,
                                 height,
                                 stride: plane.stride as i32,
+                                dma_buf: true,
                             }),
                         );
                     }
@@ -582,36 +644,31 @@ impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
                 {
                     let buffer_data = &buffer.data;
                     let length = buffer_data.stride as usize * buffer_data.height as usize;
-                    let mut pixels = vec![0_u8; length];
-                    let mut read = 0_usize;
-                    while read < length {
-                        match buffer_data
-                            .pool
-                            .file
-                            .read_at(&mut pixels[read..], buffer_data.offset + read as u64)
-                        {
-                            Ok(0) => break,
-                            Ok(bytes) => read += bytes,
-                            Err(error) => {
-                                log::warn!("read shared buffer: {error}");
-                                break;
-                            }
+                    let pixels = if buffer_data.dma_buf {
+                        map_dma_buf(&buffer_data.pool.file, buffer_data.offset, length)
+                    } else {
+                        read_shared_memory(&buffer_data.pool.file, buffer_data.offset, length)
+                    };
+                    match pixels {
+                        Ok(pixels) => {
+                            let frame = CommittedFrame {
+                                width: buffer_data.width as u32,
+                                height: buffer_data.height as u32,
+                                stride: buffer_data.stride as u32,
+                                pixels,
+                            };
+                            let _ = state.frame_tx.try_send(frame);
+                            log::trace!(
+                                "shared buffer committed: {}x{} stride={}",
+                                buffer_data.width,
+                                buffer_data.height,
+                                buffer_data.stride
+                            );
                         }
-                    }
-                    if read == length {
-                        let frame = CommittedFrame {
-                            width: buffer_data.width as u32,
-                            height: buffer_data.height as u32,
-                            stride: buffer_data.stride as u32,
-                            pixels,
-                        };
-                        let _ = state.frame_tx.try_send(frame);
-                        log::trace!(
-                            "shared buffer committed: {}x{} stride={}",
-                            buffer_data.width,
-                            buffer_data.height,
-                            buffer_data.stride
-                        );
+                        Err(error) => eprintln!(
+                            "pvrway-proxy: read {}x{} buffer failed: {error}",
+                            buffer_data.width, buffer_data.height
+                        ),
                     }
                     buffer.resource.release();
                 }
@@ -718,6 +775,7 @@ impl Dispatch<wl_shm_pool::WlShmPool, Arc<ShmPool>> for State {
                     width,
                     height,
                     stride,
+                    dma_buf: false,
                 }),
             );
         }
@@ -747,8 +805,8 @@ impl GlobalDispatch<wl_seat::WlSeat, ()> for State {
         data_init: &mut DataInit<'_, Self>,
     ) {
         let resource = data_init.init(resource, ());
-        resource.capabilities(wl_seat::Capability::Pointer | wl_seat::Capability::Keyboard);
-        resource.name("PvrWay touch and keyboard".to_string());
+        resource.capabilities(wl_seat::Capability::Pointer);
+        resource.name("PvrWay touch pointer".to_string());
     }
 }
 
