@@ -8,14 +8,19 @@ rust-version = "1.85"
 crate-type = ["cdylib"]
 
 [dependencies]
+log = "0.4"
+wayland-server = "0.31"
+wayland-protocols = { version = "0.31.2", features = ["server"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6.1", features = ["native-activity"] }
 android_logger = "0.15"
 khronos-egl = { version = "6", features = ["dynamic"] }
 libloading = "0.8"
-log = "0.4"
 ndk = "0.9"
-wayland-server = "0.31"
-wayland-protocols = { version = "0.31.2", features = ["server"] }
+
+[patch.crates-io]
+wayland-backend = { path = "vendor/wayland-backend" }
 
 [package.metadata.android]
 package = "io.eatgrapes.pvrway"

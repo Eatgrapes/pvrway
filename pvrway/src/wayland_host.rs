@@ -376,6 +376,14 @@ pub fn spawn(frame_tx: SyncSender<()>) -> Result<(), String> {
     Ok(())
 }
 
+pub fn run_foreground() -> Result<(), String> {
+    let socket = ListeningSocket::bind("pvrway-proxy.sock")
+        .map_err(|error| format!("bind proxy Wayland socket: {error:?}"))?;
+    let (frame_tx, _frame_rx) = std::sync::mpsc::sync_channel(1);
+    run(socket, frame_tx);
+    Ok(())
+}
+
 fn run(socket: ListeningSocket, frame_tx: SyncSender<()>) {
     let mut display = match Display::<State>::new() {
         Ok(display) => display,
