@@ -26,7 +26,7 @@ hypr_config="$root/home/Eatgrapes/.config/hypr/hyprland.conf"
 mkdir -p "$(dirname "$hypr_config")"
 if [ ! -f "$hypr_config" ]; then
     printf '%s\n' \
-        'monitor=,preferred,auto,1' \
+        'monitor=WAYLAND-1,1600x720@60,0x0,1' \
         'env = WLR_BACKENDS,wayland' \
         'env = WLR_RENDERER,gles2' \
         'env = WLR_NO_HARDWARE_CURSORS,1' \
@@ -36,8 +36,6 @@ if [ ! -f "$hypr_config" ]; then
         'decoration { rounding = 8 }' \
         'misc { disable_hyprland_logo = true; disable_splash_rendering = true; vfr = false }' \
         'input { kb_layout = us }' \
-        'exec-once = waybar' \
-        'exec-once = foot' \
         'bind = SUPER, RETURN, exec, foot' \
         'bind = SUPER, Q, killactive' \
         'bind = SUPER, M, exit' > "$hypr_config"
@@ -57,19 +55,42 @@ if [ ! -f "$root/var/lib/pvrway/base-tools" ]; then
     fi
 fi
 
+if [ ! -x "$root/usr/bin/Hyprland" ]; then
+    "$chroot" "$root" /usr/bin/pacman -Sy --needed --noconfirm \
+        hyprland waybar foot wofi xdg-desktop-portal-hyprland wl-clipboard \
+        grim slurp noto-fonts ttf-dejavu gcc libdrm
+fi
+
+hook_source=/data/data/com.termux/files/home/pvrway-prime-hook.c
+if [ -f "$hook_source" ]; then
+    cp "$hook_source" "$root/tmp/pvrway-prime-hook.c"
+fi
+if [ -f "$root/tmp/pvrway-prime-hook.c" ]; then
+    "$chroot" "$root" /usr/bin/cc -shared -fPIC -O2 -I/usr/include/libdrm \
+        /tmp/pvrway-prime-hook.c -ldl -ldrm -o /tmp/pvrway-prime-hook.so
+    chown 1001:1001 "$root/tmp/pvrway-prime-hook.so"
+else
+    echo "pvrway-prime-hook.c is missing" >&2
+    exit 1
+fi
+"$chroot" "$root" /usr/bin/dbus-uuidgen --ensure 2>/dev/null || true
+
 am start -n io.eatgrapes.pvrway/android.app.NativeActivity >/dev/null
 until [ -S "$app_files/pvrway-frame.sock" ]; do sleep 1; done
 
 chmod 777 "$app_files"
 chmod 666 "$app_files/pvrway-frame.sock"
+chmod 666 /dev/ion /dev/dri/card0 /dev/dri/renderD128
 mkdir -p "$root/run/pvrway-app" "$root/run/user/1001"
 grep -q " $root/run/pvrway-app " /proc/mounts || mount --bind "$app_files" "$root/run/pvrway-app"
-chmod 777 "$root/run/user/1001"
+chown 1001:1001 "$root/run/user/1001"
+chmod 700 "$root/run/user/1001"
 
 while grep -q " $root/run/user/1001 " /proc/mounts; do
     umount "$root/run/user/1001" 2>/dev/null || break
 done
-chmod 777 "$root/run/user/1001"
+chown 1001:1001 "$root/run/user/1001"
+chmod 700 "$root/run/user/1001"
 
 mkdir -p "$root/apex/com.android.runtime"
 grep -q " $root/apex/com.android.runtime " /proc/mounts || \
@@ -81,9 +102,24 @@ rm -f "$root/run/user/1001/pvrway-proxy.sock" "$root/run/user/1001/pvrway-proxy.
 
 export XDG_RUNTIME_DIR=/run/user/1001
 export WAYLAND_DISPLAY=pvrway-proxy.sock
-if "$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c \
-    "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=pvrway-proxy.sock WLR_BACKENDS=wayland WLR_RENDERER=gles2 WLR_NO_HARDWARE_CURSORS=1 WLR_LIBINPUT_NO_DEVICES=1 Hyprland"; then
-    exit 0
-fi
-exec "$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c \
-    "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=pvrway-proxy.sock weston-terminal"
+for pid in $(pidof Hyprland 2>/dev/null || true); do kill "$pid" 2>/dev/null || true; done
+rm -f "$root/run/user/1001/wayland-1" "$root/run/user/1001/wayland-1.lock"
+"$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c \
+    "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=pvrway-proxy.sock LD_PRELOAD=/tmp/pvrway-prime-hook.so LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=llvmpipe GALLIUM_DRIVER=llvmpipe WLR_BACKENDS=wayland WLR_RENDERER=gles2 WLR_NO_HARDWARE_CURSORS=1 WLR_LIBINPUT_NO_DEVICES=1 nohup Hyprland >/tmp/hyprland.log 2>&1 &"
+
+while [ ! -S "$root/run/user/1001/wayland-1" ]; do sleep 1; done
+while :; do
+    hypr_socket=$(ls -t "$root/run/user/1001/hypr"/*/.socket.sock 2>/dev/null | head -n 1 || true)
+    [ -n "$hypr_socket" ] && break
+    sleep 1
+done
+hypr_socket=${hypr_socket#"$root"}
+sleep 3
+printf '%s' 'output create headless PVR' | "$chroot" "$root" /system/bin/nc -U "$hypr_socket"
+printf '%s' 'keyword monitor PVR,1600x720@60,0x0,1' | "$chroot" "$root" /system/bin/nc -U "$hypr_socket"
+printf '%s' 'keyword monitor WAYLAND-1,1600x720@60,0x0,1,mirror,PVR' | "$chroot" "$root" /system/bin/nc -U "$hypr_socket"
+
+"$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c \
+    "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1 nohup foot >/tmp/foot.log 2>&1 &"
+"$chroot" "$root" /usr/bin/su - Eatgrapes -s /bin/bash -c \
+    "XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1 nohup dbus-run-session waybar >/tmp/waybar.log 2>&1 &"

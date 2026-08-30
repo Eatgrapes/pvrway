@@ -1,12 +1,12 @@
 use std::io;
 #[cfg(target_os = "android")]
 use std::io::Read;
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), feature = "proxy"))]
 use std::io::Write;
 
 #[cfg(target_os = "android")]
 pub const ANDROID_FRAME_SOCKET: &str = "/data/user/0/io.eatgrapes.pvrway/files/pvrway-frame.sock";
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), feature = "proxy"))]
 pub const PROXY_FRAME_SOCKET: &str = "/run/pvrway-app/pvrway-frame.sock";
 const MAGIC: [u8; 4] = *b"PVRW";
 #[cfg(target_os = "android")]
@@ -20,7 +20,7 @@ pub struct CommittedFrame {
     pub pixels: Vec<u8>,
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), feature = "proxy"))]
 pub fn write_frame(mut writer: impl Write, frame: &CommittedFrame) -> io::Result<()> {
     writer.write_all(&MAGIC)?;
     writer.write_all(&frame.width.to_le_bytes())?;

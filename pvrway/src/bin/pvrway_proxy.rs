@@ -1,3 +1,5 @@
+#![cfg(feature = "proxy")]
+
 #[path = "../frame_protocol.rs"]
 mod frame_protocol;
 #[path = "../input_protocol.rs"]
@@ -23,7 +25,10 @@ fn send_frames(frame_rx: std::sync::mpsc::Receiver<frame_protocol::CommittedFram
                         break;
                     }
                 }
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(250)),
+                Err(error) => {
+                    eprintln!("pvrway-proxy: frame socket unavailable: {error}");
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
             }
         }
     }

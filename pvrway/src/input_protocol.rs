@@ -1,12 +1,12 @@
 use std::io;
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), feature = "proxy"))]
 use std::io::Read;
 #[cfg(target_os = "android")]
 use std::io::Write;
 
 #[cfg(target_os = "android")]
 pub const ANDROID_INPUT_SOCKET: &str = "/data/user/0/io.eatgrapes.pvrway/files/pvrway-input.sock";
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), feature = "proxy"))]
 pub const PROXY_INPUT_SOCKET: &str = "/run/pvrway-app/pvrway-input.sock";
 
 #[derive(Clone, Copy, Debug)]
@@ -62,7 +62,7 @@ pub fn write_input(mut writer: impl Write, packet: InputPacket) -> io::Result<()
     writer.write_all(&bytes[..length])
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), feature = "proxy"))]
 pub fn read_input(mut reader: impl Read) -> io::Result<InputPacket> {
     let mut kind = [0_u8; 1];
     reader.read_exact(&mut kind)?;
