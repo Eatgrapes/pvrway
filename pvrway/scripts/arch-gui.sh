@@ -5,10 +5,17 @@ if [ "$(id -u)" -ne 0 ]; then
     exec su -c "$0 $*"
 fi
 
-root=/data/local/archlinux
+base=/data/local/archlinux
+root=/data/local/archlinux-suid
 app_files=/data/user/0/io.eatgrapes.pvrway/files
 proxy=/tmp/pvrway-build/release/pvrway_proxy
 chroot=/data/data/com.termux/files/usr/bin/chroot
+
+mkdir -p "$root"
+if ! grep -q " $root " /proc/mounts; then
+    mount --rbind "$base" "$root"
+    mount -o remount,bind,suid "$root"
+fi
 
 printf '%s\n' 'root:123456' | "$chroot" "$root" /usr/bin/chpasswd
 mkdir -p "$root/etc/sudoers.d"
