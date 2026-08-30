@@ -416,10 +416,19 @@ fn run(socket: ListeningSocket, frame_tx: SyncSender<()>) {
                 log::warn!("accept Wayland client: {error}");
             }
         }
-        match display.dispatch_clients(&mut state) {
-            Ok(count) if count > 0 => log::info!("dispatched {count} Wayland requests"),
-            Ok(_) => {}
-            Err(error) => log::warn!("dispatch Wayland clients: {error}"),
+        let dispatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            display.dispatch_clients(&mut state)
+        }));
+        match dispatch {
+            Ok(result) => match result {
+                Ok(count) if count > 0 => log::info!("dispatched {count} Wayland requests"),
+                Ok(_) => {}
+                Err(error) => log::warn!("dispatch Wayland clients: {error}"),
+            },
+            Err(_) => {
+                log::error!("Wayland dispatch panicked; server loop is stopping");
+                return;
+            }
         }
         if let Err(error) = display.flush_clients() {
             log::warn!("flush Wayland clients: {error}");
