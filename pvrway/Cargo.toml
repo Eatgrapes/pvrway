@@ -8,12 +8,12 @@ rust-version = "1.85"
 crate-type = ["cdylib"]
 
 [features]
-proxy = []
+proxy = ["dep:wayland-server", "dep:wayland-protocols"]
 
 [dependencies]
 log = "0.4"
-wayland-server = "0.31"
-wayland-protocols = { version = "0.31.2", features = ["server", "unstable"] }
+wayland-server = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.31.2", features = ["server", "unstable"], optional = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 
