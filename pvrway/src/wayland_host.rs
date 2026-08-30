@@ -1,24 +1,33 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::os::unix::fs::FileExt;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::Duration;
 
 use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_server::backend::{ClientData, ClientId, DisconnectReason, GlobalId};
 use wayland_server::protocol::{
-    wl_buffer, wl_callback, wl_compositor, wl_output, wl_region, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_output, wl_pointer, wl_region, wl_seat, wl_shm,
+    wl_shm_pool, wl_surface,
 };
 use wayland_server::{
     DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, ListeningSocket, New, Resource,
 };
 
+use crate::frame_protocol::CommittedFrame;
+use crate::input_protocol::{PROXY_INPUT_SOCKET, PointerAction, PointerPacket, read_pointer};
+
 pub struct State {
     globals: Vec<GlobalId>,
-    frame_tx: SyncSender<()>,
+    frame_tx: SyncSender<CommittedFrame>,
+    input_rx: Receiver<PointerPacket>,
+    pointers: Vec<wl_pointer::WlPointer>,
+    active_surface: Option<wl_surface::WlSurface>,
+    serial: u32,
 }
 
 struct ShmPool {
@@ -33,9 +42,14 @@ struct ShmBuffer {
     stride: i32,
 }
 
+struct AttachedBuffer {
+    resource: wl_buffer::WlBuffer,
+    data: Arc<ShmBuffer>,
+}
+
 #[derive(Default)]
 struct SurfaceState {
-    pending_buffer: Mutex<Option<Arc<ShmBuffer>>>,
+    pending_buffer: Mutex<Option<AttachedBuffer>>,
     frame_callbacks: Mutex<Vec<wl_callback::WlCallback>>,
 }
 
@@ -71,7 +85,6 @@ impl Dispatch<wl_compositor::WlCompositor, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        log::info!("compositor request: {request:?}");
         match request {
             wl_compositor::Request::CreateSurface { id } => {
                 data_init.init::<wl_surface::WlSurface, _>(id, Arc::new(SurfaceState::default()));
@@ -94,11 +107,15 @@ impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        log::info!("surface request: {request:?}");
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
-                let buffer = buffer.and_then(|buffer| buffer.data::<Arc<ShmBuffer>>().cloned());
-                log::info!("surface attach: shared_memory={}", buffer.is_some());
+                let buffer = buffer.and_then(|resource| {
+                    resource
+                        .data::<Arc<ShmBuffer>>()
+                        .cloned()
+                        .map(|data| AttachedBuffer { resource, data })
+                });
+                log::trace!("surface attach: shared_memory={}", buffer.is_some());
                 *data.pending_buffer.lock().expect("surface buffer lock") = buffer;
             }
             wl_surface::Request::Frame { callback } => {
@@ -109,23 +126,47 @@ impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
                     .push(callback);
             }
             wl_surface::Request::Commit => {
+                state.active_surface = Some(_resource.clone());
                 if let Some(buffer) = data
                     .pending_buffer
                     .lock()
                     .expect("surface buffer lock")
                     .as_ref()
                 {
-                    let mut pixel = [0_u8; 4];
-                    match buffer.pool.file.read_at(&mut pixel, buffer.offset) {
-                        Ok(4) => log::info!(
-                            "shared buffer committed: {}x{} stride={} first_pixel={pixel:02x?}",
-                            buffer.width,
-                            buffer.height,
-                            buffer.stride
-                        ),
-                        Ok(bytes) => log::warn!("short shared buffer read: {bytes} bytes"),
-                        Err(error) => log::warn!("read shared buffer: {error}"),
+                    let buffer_data = &buffer.data;
+                    let length = buffer_data.stride as usize * buffer_data.height as usize;
+                    let mut pixels = vec![0_u8; length];
+                    let mut read = 0_usize;
+                    while read < length {
+                        match buffer_data
+                            .pool
+                            .file
+                            .read_at(&mut pixels[read..], buffer_data.offset + read as u64)
+                        {
+                            Ok(0) => break,
+                            Ok(bytes) => read += bytes,
+                            Err(error) => {
+                                log::warn!("read shared buffer: {error}");
+                                break;
+                            }
+                        }
                     }
+                    if read == length {
+                        let frame = CommittedFrame {
+                            width: buffer_data.width as u32,
+                            height: buffer_data.height as u32,
+                            stride: buffer_data.stride as u32,
+                            pixels,
+                        };
+                        let _ = state.frame_tx.try_send(frame);
+                        log::trace!(
+                            "shared buffer committed: {}x{} stride={}",
+                            buffer_data.width,
+                            buffer_data.height,
+                            buffer_data.stride
+                        );
+                    }
+                    buffer.resource.release();
                 }
                 for callback in data
                     .frame_callbacks
@@ -135,7 +176,6 @@ impl Dispatch<wl_surface::WlSurface, Arc<SurfaceState>> for State {
                 {
                     callback.done(0);
                 }
-                let _ = state.frame_tx.try_send(());
             }
             _ => {}
         }
@@ -193,7 +233,6 @@ impl Dispatch<wl_shm::WlShm, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        log::info!("shm request: {request:?}");
         if let wl_shm::Request::CreatePool { id, fd, .. } = request {
             data_init.init::<wl_shm_pool::WlShmPool, _>(
                 id,
@@ -215,7 +254,6 @@ impl Dispatch<wl_shm_pool::WlShmPool, Arc<ShmPool>> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        log::info!("shm pool request: {request:?}");
         if let wl_shm_pool::Request::CreateBuffer {
             id,
             offset,
@@ -246,6 +284,51 @@ impl Dispatch<wl_buffer::WlBuffer, Arc<ShmBuffer>> for State {
         _resource: &wl_buffer::WlBuffer,
         _request: wl_buffer::Request,
         _data: &Arc<ShmBuffer>,
+        _handle: &DisplayHandle,
+        _data_init: &mut DataInit<'_, Self>,
+    ) {
+    }
+}
+
+impl GlobalDispatch<wl_seat::WlSeat, ()> for State {
+    fn bind(
+        _state: &mut Self,
+        _handle: &DisplayHandle,
+        _client: &wayland_server::Client,
+        resource: New<wl_seat::WlSeat>,
+        _global_data: &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        let resource = data_init.init(resource, ());
+        resource.capabilities(wl_seat::Capability::Pointer);
+        resource.name("PvrWay touch pointer".to_string());
+    }
+}
+
+impl Dispatch<wl_seat::WlSeat, ()> for State {
+    fn request(
+        state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &wl_seat::WlSeat,
+        request: wl_seat::Request,
+        _data: &(),
+        _handle: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_seat::Request::GetPointer { id } = request {
+            let pointer = data_init.init::<wl_pointer::WlPointer, _>(id, ());
+            state.pointers.push(pointer);
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, ()> for State {
+    fn request(
+        _state: &mut Self,
+        _client: &wayland_server::Client,
+        _resource: &wl_pointer::WlPointer,
+        _request: wl_pointer::Request,
+        _data: &(),
         _handle: &DisplayHandle,
         _data_init: &mut DataInit<'_, Self>,
     ) {
@@ -319,7 +402,6 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        log::info!("xdg_wm_base request: {request:?}");
         match request {
             xdg_wm_base::Request::GetXdgSurface { id, .. } => {
                 data_init.init::<xdg_surface::XdgSurface, _>(id, ());
@@ -342,10 +424,9 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        log::info!("xdg_surface request: {request:?}");
         if let xdg_surface::Request::GetToplevel { id } = request {
             let toplevel = data_init.init::<xdg_toplevel::XdgToplevel, _>(id, ());
-            toplevel.configure(720, 1504, Vec::new());
+            toplevel.configure(1600, 720, Vec::new());
             resource.configure(1);
         }
     }
@@ -364,27 +445,19 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
     }
 }
 
-pub fn spawn(frame_tx: SyncSender<()>) -> Result<(), String> {
-    let socket = ListeningSocket::bind_absolute(PathBuf::from(
-        "/data/user/0/io.eatgrapes.pvrway/files/pvrway.sock",
-    ))
-    .map_err(|error| format!("bind Wayland socket: {error:?}"))?;
-    thread::Builder::new()
-        .name("pvrway-wayland".to_string())
-        .spawn(move || run(socket, frame_tx))
-        .map_err(|error| format!("spawn Wayland server: {error}"))?;
-    Ok(())
-}
-
-pub fn run_foreground() -> Result<(), String> {
+pub fn run_foreground(frame_tx: SyncSender<CommittedFrame>) -> Result<(), String> {
     let socket = ListeningSocket::bind("pvrway-proxy.sock")
         .map_err(|error| format!("bind proxy Wayland socket: {error:?}"))?;
-    let (frame_tx, _frame_rx) = std::sync::mpsc::sync_channel(1);
-    run(socket, frame_tx);
+    let input_rx = spawn_input_receiver()?;
+    run(socket, frame_tx, input_rx);
     Ok(())
 }
 
-fn run(socket: ListeningSocket, frame_tx: SyncSender<()>) {
+fn run(
+    socket: ListeningSocket,
+    frame_tx: SyncSender<CommittedFrame>,
+    input_rx: Receiver<PointerPacket>,
+) {
     let mut display = match Display::<State>::new() {
         Ok(display) => display,
         Err(error) => {
@@ -395,6 +468,10 @@ fn run(socket: ListeningSocket, frame_tx: SyncSender<()>) {
     let mut state = State {
         globals: Vec::new(),
         frame_tx,
+        input_rx,
+        pointers: Vec::new(),
+        active_surface: None,
+        serial: 1,
     };
     state.globals.push(
         display
@@ -416,6 +493,11 @@ fn run(socket: ListeningSocket, frame_tx: SyncSender<()>) {
             .handle()
             .create_global::<State, wl_output::WlOutput, ()>(3, ()),
     );
+    state.globals.push(
+        display
+            .handle()
+            .create_global::<State, wl_seat::WlSeat, ()>(7, ()),
+    );
     let client_data: Arc<dyn ClientData> = Arc::new(ClientLog);
 
     loop {
@@ -429,8 +511,7 @@ fn run(socket: ListeningSocket, frame_tx: SyncSender<()>) {
         }));
         match dispatch {
             Ok(result) => match result {
-                Ok(count) if count > 0 => log::info!("dispatched {count} Wayland requests"),
-                Ok(_) => {}
+                Ok(_count) => {}
                 Err(error) => log::warn!("dispatch Wayland clients: {error}"),
             },
             Err(_) => {
@@ -441,6 +522,73 @@ fn run(socket: ListeningSocket, frame_tx: SyncSender<()>) {
         if let Err(error) = display.flush_clients() {
             log::warn!("flush Wayland clients: {error}");
         }
+        while let Ok(packet) = state.input_rx.try_recv() {
+            state.dispatch_pointer(packet);
+        }
         thread::sleep(Duration::from_millis(4));
     }
+}
+
+impl State {
+    fn dispatch_pointer(&mut self, packet: PointerPacket) {
+        let Some(surface) = self.active_surface.clone() else {
+            return;
+        };
+        let x = packet.x.clamp(0.0, 1599.0) as f64;
+        let y = packet.y.clamp(0.0, 719.0) as f64;
+        self.serial = self.serial.wrapping_add(1);
+        let serial = self.serial;
+        for pointer in &self.pointers {
+            match packet.action {
+                PointerAction::Down => {
+                    pointer.enter(serial, &surface, x, y);
+                    pointer.motion(packet.time, x, y);
+                    pointer.button(serial, packet.time, 0x110, wl_pointer::ButtonState::Pressed);
+                    pointer.frame();
+                }
+                PointerAction::Motion => {
+                    pointer.motion(packet.time, x, y);
+                    pointer.frame();
+                }
+                PointerAction::Up => {
+                    pointer.motion(packet.time, x, y);
+                    pointer.button(
+                        serial,
+                        packet.time,
+                        0x110,
+                        wl_pointer::ButtonState::Released,
+                    );
+                    pointer.leave(serial, &surface);
+                    pointer.frame();
+                }
+                PointerAction::Cancel => {
+                    pointer.leave(serial, &surface);
+                    pointer.frame();
+                }
+            }
+        }
+    }
+}
+
+fn spawn_input_receiver() -> Result<Receiver<PointerPacket>, String> {
+    let _ = fs::remove_file(PROXY_INPUT_SOCKET);
+    let listener = UnixListener::bind(PROXY_INPUT_SOCKET)
+        .map_err(|error| format!("bind input socket: {error}"))?;
+    fs::set_permissions(PROXY_INPUT_SOCKET, fs::Permissions::from_mode(0o666))
+        .map_err(|error| format!("set input socket permissions: {error}"))?;
+    let (input_tx, input_rx) = mpsc::sync_channel(64);
+    thread::Builder::new()
+        .name("pvrway-input-receiver".to_string())
+        .spawn(move || {
+            for connection in listener.incoming() {
+                match connection.and_then(read_pointer) {
+                    Ok(packet) => {
+                        let _ = input_tx.try_send(packet);
+                    }
+                    Err(error) => log::warn!("receive Android pointer: {error}"),
+                }
+            }
+        })
+        .map_err(|error| format!("spawn input receiver: {error}"))?;
+    Ok(input_rx)
 }
